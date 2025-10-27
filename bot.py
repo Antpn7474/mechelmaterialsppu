@@ -23,9 +23,9 @@ BOT_TOKEN = "7578917097:AAE-FwH8lj6JXTyzaTD-hC-OIWeyqaHtFxo" # Лучше в п�
 ADMIN_IDS = [1618247541]
 DATA_FILE = "suggestions.json"
 
-SUGGESTION = 1
-
+SUGGESTION, PHOTO_UPLOAD = range(2)
 LIST_SUGGESTIONS, VIEW_SUGGESTION, COMMENT_INPUT = range(3, 6)
+USER_CHAT = 6
 
 def load_data():
     try:
@@ -44,7 +44,8 @@ def is_admin(user_id):
 def get_user_menu():
     keyboard = [
         [KeyboardButton("Подать предложение по улучшению")],
-        [KeyboardButton("Посмотреть историю предложений")]
+        [KeyboardButton("Посмотреть историю предложений")],
+        [KeyboardButton("Важная информация")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -67,33 +68,46 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_user_menu(),
         )
 
-async def handle_user_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def handle_important_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Стандарт оформления предложений по улучшениям:\n\n"
+        "1. Где внедрять? (цех, участок, офис)\n"
+        "2. Что сейчас и что улучшить? (проблема + идея)\n"
+        "3. Какой плюс? (безопасность, экономия, удобство)\n"
+        "4. Как внедрять? (шаги, что потребуется)\n"
+        "5. Приложи схему/фото/расчёты"
+        "\n\nОформи по пунктам — это увеличивает шанс одобрения и премии!"
+    )
+
+async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    data = load_data()
+    user_suggestions = [s for s in data if s["user_id"] == user.id]
 
-    if text == "Посмотреть историю предложений":
-        data = load_data()
-        user_suggestions = [s for s in data if s["user_id"] == user.id]
-
-        if not user_suggestions:
-            menu = get_admin_menu() if is_admin(user.id) else get_user_menu()
-            await update.message.reply_text("У вас нет поданных предложений.", reply_markup=menu)
-            return
-
-        for s in user_suggestions:
-            msg = (
-                f"ID: {s['id']}\n"
-                f"Дата: {s['date'][:19]}\n"
-                f"Текст: {s['text']}\n"
-                f"Статус: {s['status']}\n"
-                f"Комментарий: {s['comment'] if s['comment'] else 'нет'}"
-            )
-            await update.message.reply_text(msg)
-        
+    if not user_suggestions:
         menu = get_admin_menu() if is_admin(user.id) else get_user_menu()
-        await update.message.reply_text("История предложений показана выше.", reply_markup=menu)
-    else:
-        await update.message.reply_text("Пожалуйста, используйте меню.")
+        await update.message.reply_text("У вас нет поданных предложений.", reply_markup=menu)
+        return
+
+    for s in user_suggestions:
+        msg = (
+            f"ID: {s['id']}\n"
+            f"Дата: {s['date'][:19]}\n"
+            f"Текст: {s['text']}\n"
+            f"Статус: {s['status']}\n"
+            f"Комментарий: {s['comment'] if s['comment'] else 'нет'}"
+        )
+        await update.message.reply_text(msg)
+        
+        if s.get('photos'):
+            for photo_id in s['photos']:
+                try:
+                    await update.message.reply_photo(photo=photo_id)
+                except Exception as e:
+                    print(f"Ошибка отправки фото: {e}")
+    
+    menu = get_admin_menu() if is_admin(user.id) else get_user_menu()
+    await update.message.reply_text("История предложений показана выше.", reply_markup=menu)
 
 async def start_suggestion_flow(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -105,7 +119,13 @@ async def start_suggestion_flow(update: Update, context: ContextTypes.DEFAULT_TY
         return ConversationHandler.END
     
     await update.message.reply_text(
-        "Пожалуйста, опишите вашу идею по пунктам: 1. Отдел/место применения: где это будет действовать. 2. Подробное описание: что именно, как работает сейчас, что предлагаете изменить. 3. Выгода/эффект: экономия времени/денег, повышение безопасности, качество, удобство. 4.Примерный план внедрения: простые шаги, ресурсы. 5.Вложения: фото, схемы, расчёты.Чтобы отменить /cancel.",
+        "Пожалуйста, опишите вашу идею по пунктам:\n\n"
+        "1. Отдел/место применения: где это будет действовать\n"
+        "2. Подробное описание: что именно, как работает сейчас, что предлагаете изменить\n"
+        "3. Выгода/эффект: экономия времени/денег, повышение безопасности, качество, удобство\n"
+        "4. Примерный план внедрения: простые шаги, ресурсы\n"
+        "5. Вложения: фото, схемы, расчёты\n\n"
+        "Чтобы отменить введите /cancel.",
         reply_markup=ReplyKeyboardRemove()
     )
     return SUGGESTION
@@ -118,8 +138,35 @@ async def handle_new_suggestion(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text("Пустое предложение не может быть сохранено. Пожалуйста, введите текст или /cancel.")
         return SUGGESTION
 
+    context.user_data["suggestion_text"] = text
+    context.user_data["suggestion_photos"] = []
+
+    await update.message.reply_text(
+        "Теперь вы можете отправить 1 или несколько фото (по одному). "
+        "После загрузки всех нужных — напишите /done. "
+        "Если фото не нужны, также напишите /done. "
+        "Для отмены — /cancel."
+    )
+    return PHOTO_UPLOAD
+
+async def handle_photo_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        file_id = photo.file_id
+        context.user_data.setdefault("suggestion_photos", []).append(file_id)
+        await update.message.reply_text("Фото добавлено. Если есть ещё — пришлите ещё. После окончания напишите /done.")
+        return PHOTO_UPLOAD
+    else:
+        await update.message.reply_text("Пожалуйста, отправьте фото или завершите ввод командой /done.")
+        return PHOTO_UPLOAD
+
+async def handle_suggestion_done(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    text = context.user_data.get("suggestion_text")
+    photos = context.user_data.get("suggestion_photos", [])
     data = load_data()
     suggestion_id = max([s["id"] for s in data], default=0) + 1
+
     new_suggestion = {
         "id": suggestion_id,
         "user_id": user.id,
@@ -128,16 +175,33 @@ async def handle_new_suggestion(update: Update, context: ContextTypes.DEFAULT_TY
         "date": datetime.datetime.now().isoformat(),
         "status": "Новый",
         "comment": "",
+        "photos": photos,
+        "chat_messages": []
     }
     data.append(new_suggestion)
     data.sort(key=lambda x: x["date"], reverse=True)
     save_data(data)
 
+    context.user_data.pop("suggestion_text", None)
+    context.user_data.pop("suggestion_photos", None)
+
     menu = get_admin_menu() if is_admin(user.id) else get_user_menu()
+
     await update.message.reply_text(
-        f"Спасибо! Ваше предложение зарегистровано под №{suggestion_id}. Ответ будет в этом боте, а также вы сможете наблюдать статус вашего обращения!",
+        f"Спасибо! Ваше предложение зарегистрировано под №{suggestion_id}. "
+        f"Ответ будет в этом боте, а также вы сможете наблюдать статус вашего обращения!",
         reply_markup=menu
     )
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"Новое предложение №{suggestion_id} от {user.full_name}:\n\n{text[:200]}{'...' if len(text) > 200 else ''}"
+            )
+        except Exception as e:
+            print(f"Ошибка при уведомлении админа {admin_id}: {e}")
+    
     return ConversationHandler.END
 
 async def send_suggestions_list_message(update_or_query_or_message, context):
@@ -181,18 +245,27 @@ async def send_detailed_suggestion_message(update_or_query, context, suggestion_
         f"Дата: {suggestion['date'][:19]}\n"
         f"Текст: {suggestion['text']}\n"
         f"Статус: {suggestion['status']}\n"
-        f"Комментарий: {suggestion['comment'] if suggestion['comment'] else 'нет'}\n\n"
+        f"Комментарий: {suggestion['comment'] if suggestion['comment'] else 'нет'}\n"
+        f"Фото: {len(suggestion.get('photos', []))} шт.\n\n"
         "Выберите действие:"
     )
     keyboard = [
         [
             InlineKeyboardButton("Принято к рассмотрению", callback_data=f"status_{suggestion_id}_Принято к рассмотрению"),
+        ],
+        [
             InlineKeyboardButton("Удовлетворено", callback_data=f"status_{suggestion_id}_Удовлетворено"),
             InlineKeyboardButton("Отказано", callback_data=f"status_{suggestion_id}_Отказано"),
         ],
         [InlineKeyboardButton("Добавить комментарий", callback_data=f"comment_{suggestion_id}")],
-        [InlineKeyboardButton("Назад", callback_data="back_to_list")],
+        [InlineKeyboardButton("Чат с пользователем", callback_data=f"chat_{suggestion_id}")],
     ]
+    
+    if suggestion.get('photos'):
+        keyboard.append([InlineKeyboardButton("Показать фото", callback_data=f"showphotos_{suggestion_id}")])
+    
+    keyboard.append([InlineKeyboardButton("Назад", callback_data="back_to_list")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if hasattr(update_or_query, 'edit_message_text'):
@@ -271,6 +344,46 @@ async def handle_view_suggestion_callbacks(update: Update, context: ContextTypes
         )
         return COMMENT_INPUT
 
+    elif data_payload.startswith("chat_"):
+        suggestion_id = int(data_payload.split("_")[1])
+        suggestion = next((s for s in data if s["id"] == suggestion_id), None)
+        if suggestion:
+            context.user_data["chat_suggestion_id"] = suggestion_id
+            chat_messages = suggestion.get("chat_messages", [])
+            
+            if chat_messages:
+                msg_text = f"История чата по предложению №{suggestion_id}:\n\n"
+                for msg in chat_messages[-10:]:
+                    msg_text += f"{msg['from']}: {msg['text']}\n{msg['date'][:16]}\n\n"
+            else:
+                msg_text = f"Чат по предложению №{suggestion_id} пуст.\n\n"
+            
+            msg_text += "Отправьте сообщение пользователю или /done для выхода."
+            
+            await query.edit_message_text(msg_text)
+            return COMMENT_INPUT
+        else:
+            await query.edit_message_text("Предложение не найдено.")
+            return VIEW_SUGGESTION
+
+    elif data_payload.startswith("showphotos_"):
+        suggestion_id = int(data_payload.split("_")[1])
+        suggestion = next((s for s in data if s["id"] == suggestion_id), None)
+        if suggestion and suggestion.get('photos'):
+            await query.answer("Отправляю фото...")
+            for photo_id in suggestion['photos']:
+                try:
+                    await context.bot.send_photo(
+                        chat_id=query.message.chat_id,
+                        photo=photo_id,
+                        caption=f"Фото из предложения №{suggestion_id}"
+                    )
+                except Exception as e:
+                    print(f"Ошибка отправки фото: {e}")
+        else:
+            await query.answer("Фото не найдены.")
+        return VIEW_SUGGESTION
+
     elif data_payload == "back_to_list":
         await send_suggestions_list_message(query, context)
         context.user_data.pop("current_suggestion_id", None)
@@ -284,51 +397,148 @@ async def comment_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         await update.message.reply_text("У вас нет прав оставлять комментарии.")
         return ConversationHandler.END
 
-    suggestion_id = context.user_data.get("comment_for")
-    if suggestion_id is None:
+    comment_for = context.user_data.get("comment_for")
+    chat_suggestion_id = context.user_data.get("chat_suggestion_id")
+    
+    if chat_suggestion_id:
+        suggestion_id = chat_suggestion_id
+        comment_text = update.message.text.strip()
+
+        if comment_text.startswith('/done'):
+            await update.message.reply_text("Чат завершён.")
+            context.user_data.pop("chat_suggestion_id", None)
+            await send_detailed_suggestion_message(update.message, context, suggestion_id)
+            return VIEW_SUGGESTION
+        elif comment_text.startswith('/cancel'):
+            await update.message.reply_text("Чат отменён.")
+            context.user_data.pop("chat_suggestion_id", None)
+            await send_detailed_suggestion_message(update.message, context, suggestion_id)
+            return VIEW_SUGGESTION
+        else:
+            data = load_data()
+            suggestion = next((s for s in data if s["id"] == suggestion_id), None)
+
+            if not suggestion:
+                await update.message.reply_text("Предложение не найдено.")
+                context.user_data.pop("chat_suggestion_id", None)
+                return ConversationHandler.END
+
+            if "chat_messages" not in suggestion:
+                suggestion["chat_messages"] = []
+            
+            suggestion["chat_messages"].append({
+                "from": "Администратор",
+                "text": comment_text,
+                "date": datetime.datetime.now().isoformat()
+            })
+            save_data(data)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=suggestion["user_id"],
+                    text=f"Сообщение от администратора по предложению №{suggestion_id}:\n\n{comment_text}"
+                )
+            except Exception as e:
+                print(f"Ошибка при уведомлении пользователя: {e}")
+
+            await update.message.reply_text(
+                "Сообщение отправлено. Напишите ещё или /done для выхода."
+            )
+            return COMMENT_INPUT
+    
+    elif comment_for:
+        suggestion_id = comment_for
+        comment_text = update.message.text.strip()
+
+        if comment_text.startswith('/done'):
+            await update.message.reply_text("Ввод комментария завершён.")
+            context.user_data.pop("comment_for", None)
+            await send_detailed_suggestion_message(update.message, context, suggestion_id)
+            return VIEW_SUGGESTION
+        elif comment_text.startswith('/cancel'):
+            await update.message.reply_text("Ввод комментария отменён.")
+            context.user_data.pop("comment_for", None)
+            await send_detailed_suggestion_message(update.message, context, suggestion_id)
+            return VIEW_SUGGESTION
+        else:
+            data = load_data()
+            suggestion = next((s for s in data if s["id"] == suggestion_id), None)
+
+            if not suggestion:
+                await update.message.reply_text("Предложение не найдено.")
+                context.user_data.pop("comment_for", None)
+                return ConversationHandler.END
+
+            if suggestion["comment"]:
+                suggestion["comment"] += "\n" + comment_text
+            else:
+                suggestion["comment"] = comment_text
+            save_data(data)
+
+            try:
+                await context.bot.send_message(
+                    chat_id=suggestion["user_id"],
+                    text=f"К вашему предложению №{suggestion_id} добавлен комментарий:\n{comment_text}",
+                )
+            except Exception as e:
+                print(f"Ошибка при уведомлении пользователя: {e}")
+
+            await update.message.reply_text(
+                "Комментарий добавлен. Если хотите добавить ещё, напишите текст, "
+                "или введите /done для завершения, /cancel для отмены."
+            )
+            return COMMENT_INPUT
+    else:
         await update.message.reply_text("Ошибка: не найдено предложение для комментария.")
         return ConversationHandler.END
 
-    comment_text = update.message.text.strip()
-
-    if comment_text.startswith('/done'):
-        await update.message.reply_text("Ввод комментария завершён.")
-        context.user_data.pop("comment_for", None)
-        await send_detailed_suggestion_message(update.message, context, suggestion_id)
-        return VIEW_SUGGESTION
-    elif comment_text.startswith('/cancel'):
-        await update.message.reply_text("Ввод комментария отменён.")
-        context.user_data.pop("comment_for", None)
-        await send_detailed_suggestion_message(update.message, context, suggestion_id)
-        return VIEW_SUGGESTION
+async def handle_user_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    
+    if is_admin(user.id):
+        return
+    
+    message_text = update.message.text
+    
+    if message_text in ["Подать предложение по улучшению", "Посмотреть историю предложений", "Важная информация"]:
+        return
+    
+    data = load_data()
+    user_suggestions = [s for s in data if s["user_id"] == user.id]
+    
+    if not user_suggestions:
+        return
+    
+    active_suggestions = [s for s in user_suggestions if s.get("chat_messages")]
+    if active_suggestions:
+        latest_suggestion = active_suggestions[0]
     else:
-        data = load_data()
-        suggestion = next((s for s in data if s["id"] == suggestion_id), None)
-
-        if not suggestion:
-            await update.message.reply_text("Предложение не найдено.")
-            context.user_data.pop("comment_for", None)
-            return ConversationHandler.END
-
-        if suggestion["comment"]:
-            suggestion["comment"] += "\n" + comment_text
-        else:
-            suggestion["comment"] = comment_text
-        save_data(data)
-
+        latest_suggestion = user_suggestions[0]
+    
+    suggestion_id = latest_suggestion["id"]
+    
+    if "chat_messages" not in latest_suggestion:
+        latest_suggestion["chat_messages"] = []
+    
+    latest_suggestion["chat_messages"].append({
+        "from": user.full_name,
+        "text": message_text,
+        "date": datetime.datetime.now().isoformat()
+    })
+    save_data(data)
+    
+    await update.message.reply_text(
+        f"Ваше сообщение по предложению №{suggestion_id} отправлено администратору."
+    )
+    
+    for admin_id in ADMIN_IDS:
         try:
             await context.bot.send_message(
-                chat_id=suggestion["user_id"],
-                text=f"К вашему предложению №{suggestion_id} добавлен комментарий:\n{comment_text}",
+                chat_id=admin_id,
+                text=f"Новое сообщение от {user.full_name} по предложению №{suggestion_id}:\n\n{message_text}"
             )
         except Exception as e:
-            print(f"Ошибка при уведомлении пользователя: {e}")
-
-        await update.message.reply_text(
-            "Комментарий добавлен. Если хотите добавить ещё, напишите текст, "
-            "или введите /done для завершения, /cancel для отмены."
-        )
-        return COMMENT_INPUT
+            print(f"Ошибка при уведомлении админа {admin_id}: {e}")
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -337,32 +547,11 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     context.user_data.pop("comment_for", None)
     context.user_data.pop("current_suggestion_id", None)
+    context.user_data.pop("suggestion_text", None)
+    context.user_data.pop("suggestion_photos", None)
+    context.user_data.pop("chat_suggestion_id", None)
 
     return ConversationHandler.END
-
-async def admin_comment_done_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    suggestion_id = context.user_data.pop("comment_for", None)
-    await update.message.reply_text("Ввод комментария завершён.")
-    if suggestion_id:
-        await send_detailed_suggestion_message(update.message, context, suggestion_id)
-        return VIEW_SUGGESTION
-    else:
-        user_id = update.effective_user.id
-        menu = get_admin_menu() if is_admin(user_id) else get_user_menu()
-        await update.message.reply_text("Произошла ошибка, возвращаемся в главное меню.", reply_markup=menu)
-        return ConversationHandler.END
-
-async def admin_comment_cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    suggestion_id = context.user_data.pop("comment_for", None)
-    await update.message.reply_text("Ввод комментария отменён.")
-    if suggestion_id:
-        await send_detailed_suggestion_message(update.message, context, suggestion_id)
-        return VIEW_SUGGESTION
-    else:
-        user_id = update.effective_user.id
-        menu = get_admin_menu() if is_admin(user_id) else get_user_menu()
-        await update.message.reply_text("Произошла ошибка, возвращаемся в главное меню.", reply_markup=menu)
-        return ConversationHandler.END
 
 def main():
     if not BOT_TOKEN:
@@ -378,15 +567,22 @@ def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Regex("^Посмотреть историю предложений$"), handle_user_menu))
+    app.add_handler(MessageHandler(filters.Regex("^Важная информация$"), handle_important_info))
+    app.add_handler(MessageHandler(filters.Regex("^Посмотреть историю предложений$"), handle_view_history))
 
     suggestion_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^Подать предложение по улучшению$"), start_suggestion_flow)],
         states={
             SUGGESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_suggestion)],
+            PHOTO_UPLOAD: [
+                MessageHandler(filters.PHOTO, handle_photo_upload),
+                CommandHandler("done", handle_suggestion_done),
+                CommandHandler("cancel", cancel_handler),
+            ],
         },
         fallbacks=[CommandHandler("cancel", cancel_handler)],
     )
+
     app.add_handler(suggestion_conv)
 
     admin_conv = ConversationHandler(
@@ -398,20 +594,23 @@ def main():
                 CallbackQueryHandler(handle_list_suggestions_callbacks, pattern="^view_\\d+$")
             ],
             VIEW_SUGGESTION: [
-                CallbackQueryHandler(handle_view_suggestion_callbacks, pattern="^(status_\\d+_.+|comment_\\d+|back_to_list)$")
+                CallbackQueryHandler(handle_view_suggestion_callbacks, pattern="^(status_\\d+_.+|comment_\\d+|chat_\\d+|showphotos_\\d+|back_to_list)$")
             ],
             COMMENT_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, comment_text_handler),
-                CommandHandler("cancel", admin_comment_cancel_handler),
-                CommandHandler("done", admin_comment_done_handler),
+                CommandHandler("cancel", cancel_handler),
+                CommandHandler("done", cancel_handler),
             ],
         },
         fallbacks=[
             CommandHandler("cancel", cancel_handler),
             CommandHandler("start", cancel_handler)
         ],
+        per_message=False,
     )
     app.add_handler(admin_conv)
+    
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_reply))
 
     print("Бот запущен и готов к работе!")
     app.run_polling()

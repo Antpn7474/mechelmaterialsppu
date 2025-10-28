@@ -1,6 +1,7 @@
 import os
 import json
 import datetime
+import logging
 from telegram import (
     Update,
     InlineKeyboardButton,
@@ -19,7 +20,13 @@ from telegram.ext import (
     filters,
 )
 
-BOT_TOKEN = "7578917097:AAE-FwH8lj6JXTyzaTD-hC-OIWeyqaHtFxo" # Лучше в переменной среды!
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+BOT_TOKEN = "7578917097:AAHJa_8tvC91Y9G8Ca9eTP9yLquFsFb4-UI"
 ADMIN_IDS = [1618247541]
 DATA_FILE = "suggestions.json"
 
@@ -104,7 +111,7 @@ async def handle_view_history(update: Update, context: ContextTypes.DEFAULT_TYPE
                 try:
                     await update.message.reply_photo(photo=photo_id)
                 except Exception as e:
-                    print(f"Ошибка отправки фото: {e}")
+                    logger.error(f"Ошибка отправки фото: {e}")
     
     menu = get_admin_menu() if is_admin(user.id) else get_user_menu()
     await update.message.reply_text("История предложений показана выше.", reply_markup=menu)
@@ -200,7 +207,7 @@ async def handle_suggestion_done(update: Update, context: ContextTypes.DEFAULT_T
                 text=f"Новое предложение №{suggestion_id} от {user.full_name}:\n\n{text[:200]}{'...' if len(text) > 200 else ''}"
             )
         except Exception as e:
-            print(f"Ошибка при уведомлении админа {admin_id}: {e}")
+            logger.error(f"Ошибка при уведомлении админа {admin_id}: {e}")
     
     return ConversationHandler.END
 
@@ -326,7 +333,7 @@ async def handle_view_suggestion_callbacks(update: Update, context: ContextTypes
                     text=f"Статус вашего предложения №{suggestion_id} обновлён на: {new_status}",
                 )
             except Exception as e:
-                print(f"Ошибка при уведомлении пользователя: {e}")
+                logger.error(f"Ошибка при уведомлении пользователя: {e}")
             
             await send_detailed_suggestion_message(query, context, suggestion_id)
             return VIEW_SUGGESTION
@@ -379,7 +386,7 @@ async def handle_view_suggestion_callbacks(update: Update, context: ContextTypes
                         caption=f"Фото из предложения №{suggestion_id}"
                     )
                 except Exception as e:
-                    print(f"Ошибка отправки фото: {e}")
+                    logger.error(f"Ошибка отправки фото: {e}")
         else:
             await query.answer("Фото не найдены.")
         return VIEW_SUGGESTION
@@ -439,7 +446,7 @@ async def comment_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     text=f"Сообщение от администратора по предложению №{suggestion_id}:\n\n{comment_text}"
                 )
             except Exception as e:
-                print(f"Ошибка при уведомлении пользователя: {e}")
+                logger.error(f"Ошибка при уведомлении пользователя: {e}")
 
             await update.message.reply_text(
                 "Сообщение отправлено. Напишите ещё или /done для выхода."
@@ -481,7 +488,7 @@ async def comment_text_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     text=f"К вашему предложению №{suggestion_id} добавлен комментарий:\n{comment_text}",
                 )
             except Exception as e:
-                print(f"Ошибка при уведомлении пользователя: {e}")
+                logger.error(f"Ошибка при уведомлении пользователя: {e}")
 
             await update.message.reply_text(
                 "Комментарий добавлен. Если хотите добавить ещё, напишите текст, "
@@ -538,7 +545,7 @@ async def handle_user_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 text=f"Новое сообщение от {user.full_name} по предложению №{suggestion_id}:\n\n{message_text}"
             )
         except Exception as e:
-            print(f"Ошибка при уведомлении админа {admin_id}: {e}")
+            logger.error(f"Ошибка при уведомлении админа {admin_id}: {e}")
 
 async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -553,18 +560,23 @@ async def cancel_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     return ConversationHandler.END
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Exception while handling an update: {context.error}")
+
 def main():
     if not BOT_TOKEN:
-        print("ОШИБКА: BOT_TOKEN не установлен!")
-        print("Пожалуйста, установите переменную окружения BOT_TOKEN в Secrets.")
+        logger.error("ОШИБКА: BOT_TOKEN не установлен!")
+        logger.error("Пожалуйста, установите переменную окружения BOT_TOKEN в Secrets.")
         return
     
     if not ADMIN_IDS:
-        print("ВНИМАНИЕ: ADMIN_IDS не установлен!")
-        print("Пожалуйста, установите переменную окружения ADMIN_IDS в Secrets.")
-        print("Формат: 1234567890,9876543210 (ID администраторов через запятую)")
+        logger.warning("ВНИМАНИЕ: ADMIN_IDS не установлен!")
+        logger.warning("Пожалуйста, установите переменную окружения ADMIN_IDS в Secrets.")
+        logger.warning("Формат: 1234567890,9876543210 (ID администраторов через запятую)")
     
     app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Regex("^Важная информация$"), handle_important_info))
@@ -612,8 +624,9 @@ def main():
     
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_reply))
 
-    print("Бот запущен и готов к работе!")
-    app.run_polling()
+    logger.info("Бот запущен и готов к работе!")
+    logger.info(f"Администраторы: {ADMIN_IDS}")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
